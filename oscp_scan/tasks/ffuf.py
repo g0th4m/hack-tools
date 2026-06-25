@@ -10,19 +10,7 @@ from pathlib import Path
 
 from oscp_scan.state import ScanState
 from oscp_scan.ui import C, ask, c, print_cmd
-
-WORDLIST_CANDIDATES = [
-    "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
-    "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
-    "/usr/share/wordlists/dirb/common.txt",
-]
-
-
-def default_wordlist() -> str | None:
-    for path in WORDLIST_CANDIDATES:
-        if Path(path).is_file():
-            return path
-    return None
+from oscp_scan.wordlists import pick_wordlist
 
 
 def _full_host(fuzz: str, domain: str) -> str:
@@ -78,8 +66,12 @@ def run_ffuf(
         print(c("[!] No domain specified.", C.YELLOW))
         return False
 
-    wl_default = default_wordlist() or ""
-    wordlist = wordlist or ask("Wordlist", wl_default)
+    wl_default = (
+        "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+        if Path("/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt").is_file()
+        else None
+    )
+    wordlist = wordlist or pick_wordlist(default_path=wl_default)
     if not wordlist or not Path(wordlist).is_file():
         print(c(f"[!] Wordlist not found: {wordlist}", C.RED))
         return False
