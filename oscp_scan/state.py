@@ -16,6 +16,7 @@ TASK_LABELS: dict[str, str] = {
     "domain_extracted": "Domain extracted",
     "hosts_updated": "/etc/hosts updated",
     "ffuf": "FFuf subdomains",
+    "feroxbuster": "Feroxbuster directories",
     "pipeline": "Full pipeline",
 }
 
@@ -26,6 +27,7 @@ TRACKED_TASKS = (
     "domain_extracted",
     "hosts_updated",
     "ffuf",
+    "feroxbuster",
 )
 
 

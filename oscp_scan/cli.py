@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from oscp_scan.state import TASK_LABELS, ScanState
-from oscp_scan.tasks import cleanup, ffuf, nmap, pipeline
+from oscp_scan.tasks import cleanup, feroxbuster, ffuf, nmap, pipeline
 from oscp_scan.ui import C, ask, ask_yes_no, c, pause
 
 MENU_ITEMS: list[tuple[str, str, tuple[str, ...]]] = [
@@ -17,6 +17,7 @@ MENU_ITEMS: list[tuple[str, str, tuple[str, ...]]] = [
     ("5", "Extract domain + update /etc/hosts", ("domain_extracted",)),
     ("6", "FFuf subdomains", ("ffuf",)),
     ("7", "Full pipeline", ("pipeline",)),
+    ("11", "Feroxbuster directories", ("feroxbuster",)),
     ("8", "Show files & command history", ()),
     ("9", "Change target", ()),
     ("10", "Clean up target files", ()),
@@ -48,7 +49,7 @@ def _progress_panel(state: ScanState) -> None:
 
     print(c("Progress", C.BOLD), f"[{bar}] {done}/{total}")
     for task_id in (
-        "full_tcp", "detail_tcp", "udp", "domain_extracted", "hosts_updated", "ffuf",
+        "full_tcp", "detail_tcp", "udp", "domain_extracted", "hosts_updated", "ffuf", "feroxbuster",
     ):
         label = TASK_LABELS.get(task_id, task_id)
         if task_id == "udp" and state.is_done("udp_bg_started") and not state.is_done("udp"):
@@ -186,6 +187,7 @@ def run_menu(state: ScanState) -> ScanState | None:
         "4": lambda: nmap.run_udp(state, background=True),
         "5": lambda: nmap.update_domain_from_nmap(state, offer_hosts=True) or True,
         "6": lambda: ffuf.run_ffuf(state),
+        "11": lambda: feroxbuster.run_feroxbuster(state),
         "7": lambda: pipeline.run_pipeline(state) or True,
         "8": lambda: _show_files(state) or True,
     }

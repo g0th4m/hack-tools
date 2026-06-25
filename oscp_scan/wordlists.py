@@ -177,11 +177,18 @@ def count_wordlist_lines(path: str | Path) -> int:
         return 0
 
 
-def pick_wordlist(*, default_path: str | None = None) -> tuple[str, int] | None:
+def pick_wordlist(
+    *,
+    default_path: str | None = None,
+    default_filter: str = "dns",
+) -> tuple[str, int] | None:
     print()
     print(c("[+] Scanning wordlists (SecLists / wordlists)...", C.YELLOW, C.BOLD))
 
-    name_filter = ask("Filter paths (empty=all, dns=subdomain lists)", _default_filter())
+    name_filter = ask(
+        "Filter paths (empty=all, dns=subdomains, web-content=directories)",
+        default_filter,
+    )
     if name_filter.lower() in ("all", "*"):
         name_filter = None
 
