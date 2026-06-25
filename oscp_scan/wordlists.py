@@ -155,7 +155,29 @@ def _default_filter() -> str:
     return "dns"
 
 
-def pick_wordlist(*, default_path: str | None = None) -> str | None:
+def count_wordlist_lines(path: str | Path) -> int:
+    path = Path(path)
+    if not path.is_file():
+        return 0
+    result = subprocess.run(
+        ["wc", "-l", str(path)],
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    if result.returncode == 0:
+        try:
+            return int(result.stdout.strip().split()[0])
+        except (IndexError, ValueError):
+            pass
+    try:
+        with path.open("rb") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return 0
+
+
+def pick_wordlist(*, default_path: str | None = None) -> tuple[str, int] | None:
     print()
     print(c("[+] Scanning wordlists (SecLists / wordlists)...", C.YELLOW, C.BOLD))
 
@@ -167,7 +189,9 @@ def pick_wordlist(*, default_path: str | None = None) -> str | None:
     if not entries:
         print(c("[!] No wordlists found on this system.", C.RED))
         custom = ask("Enter wordlist path manually")
-        return custom if custom and Path(custom).is_file() else None
+        if custom and Path(custom).is_file():
+            return custom, count_wordlist_lines(custom)
+        return None
 
     print(c(f"[+] Found {len(entries)} wordlist file(s)", C.GREEN))
     print()
@@ -202,12 +226,12 @@ def pick_wordlist(*, default_path: str | None = None) -> str | None:
         if 1 <= index <= len(entries):
             selected = entries[index - 1]
             print(c(f"[+] Selected: {selected.path}", C.GREEN))
-            return str(selected.path)
+            return str(selected.path), selected.lines
         print(c("[!] Invalid number.", C.RED))
         return None
 
     if choice and Path(choice).is_file():
-        return choice
+        return choice, count_wordlist_lines(choice)
 
     print(c(f"[!] Wordlist not found: {choice}", C.RED))
     return None

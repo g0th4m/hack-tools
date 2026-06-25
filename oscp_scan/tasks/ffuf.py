@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
+from oscp_scan.ffuf_runner import run_ffuf_with_progress
 from oscp_scan.state import ScanState
 from oscp_scan.ui import C, ask, c, print_cmd
-from oscp_scan.wordlists import pick_wordlist
+from oscp_scan.wordlists import count_wordlist_lines, pick_wordlist
 
 
 def _full_host(fuzz: str, domain: str) -> str:
@@ -53,6 +53,7 @@ def run_ffuf(
     *,
     domain: str | None = None,
     wordlist: str | None = None,
+    wordlist_lines: int = 0,
     mode: str | None = None,
 ) -> bool:
     if not shutil.which("ffuf"):
@@ -66,15 +67,24 @@ def run_ffuf(
         print(c("[!] No domain specified.", C.YELLOW))
         return False
 
-    wl_default = (
-        "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
-        if Path("/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt").is_file()
-        else None
-    )
-    wordlist = wordlist or pick_wordlist(default_path=wl_default)
+    if not wordlist:
+        wl_default = (
+            "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+            if Path("/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt").is_file()
+            else None
+        )
+        picked = pick_wordlist(default_path=wl_default)
+        if not picked:
+            print(c("[!] No wordlist selected.", C.RED))
+            return False
+        wordlist, wordlist_lines = picked
+
     if not wordlist or not Path(wordlist).is_file():
         print(c(f"[!] Wordlist not found: {wordlist}", C.RED))
         return False
+
+    if wordlist_lines <= 0:
+        wordlist_lines = count_wordlist_lines(wordlist)
 
     ffuf_url = state.web_url or f"http://{state.target}"
     safe_name = domain.replace(".", "_")
@@ -104,17 +114,19 @@ def run_ffuf(
 
     print()
     print(c(f"[+] Starting ffuf on domain: {domain}", C.GREEN, C.BOLD))
+    print(c(f"[+] Wordlist: {wordlist} ({wordlist_lines:,} lines)", C.CYAN))
     print_cmd(cmd)
     print()
 
-    with out_log.open("w", encoding="utf-8") as log:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        log.write(proc.stdout)
-        print(proc.stdout, end="")
+    returncode = run_ffuf_with_progress(
+        cmd,
+        out_log,
+        wordlist_lines=wordlist_lines,
+    )
 
     print()
     show_results(out_json, out_log, domain)
     print(c(f"[+] Output: {out_json}", C.GREEN))
     print(c(f"[+] Log: {out_log}", C.GREEN))
     state.mark_task("ffuf")
-    return proc.returncode == 0
+    return returncode == 0
