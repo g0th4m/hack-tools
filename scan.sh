@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OSCP-style scan helper: TCP full → optional UDP (background) + ffuf subdomains → detail scan
+# OSCP-style scan helper: TCP full → detail → optional UDP (bg) + ffuf subdomains
 # Usage:
 #   ./scan.sh
 #   ./scan.sh 10.129.28.172
@@ -28,6 +28,66 @@ ask_yes_no() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+ask_yes_no_default_yes() {
+    local prompt="$1"
+    local answer
+    read -rp "$(echo -e "${YELLOW}$prompt [Y/n]: ${RESET}")" answer
+    [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]
+}
+
+get_domain_sources() {
+    local nmap_file="$1"
+    local domain="$2"
+    local sources=()
+
+    [ -f "$nmap_file" ] || return 0
+
+    grep -qE "Nmap scan report for ${domain}[ (]" "$nmap_file" 2>/dev/null && sources+=("scan report")
+    grep -qiE "commonName[=: ].*${domain}" "$nmap_file" 2>/dev/null && sources+=("SSL certificate")
+    grep -qiE "DNS:${domain}" "$nmap_file" 2>/dev/null && sources+=("SSL SAN")
+    grep -qiE "https?://${domain}" "$nmap_file" 2>/dev/null && sources+=("HTTP redirect")
+
+    if [ "${#sources[@]}" -gt 0 ]; then
+        local IFS=', '
+        echo "${sources[*]}"
+    fi
+}
+
+print_domain_detection() {
+    local nmap_file="$1"
+
+    echo
+    echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════${RESET}"
+
+    if [ -n "$DETECTED_DOMAIN" ]; then
+        local sources
+        sources=$(get_domain_sources "$nmap_file" "$DETECTED_DOMAIN" || true)
+
+        echo -e "${GREEN}${BOLD}  Dominio rilevato da nmap:${RESET} ${MAGENTA}${BOLD}${DETECTED_DOMAIN}${RESET}"
+        if [ -n "$sources" ]; then
+            echo -e "${GREEN}${BOLD}  Fonte:${RESET} ${CYAN}${sources}${RESET}"
+        fi
+        if [ -n "$NMAP_DOMAINS" ] && [ "$(echo "$NMAP_DOMAINS" | wc -l | tr -d ' ')" -gt 1 ]; then
+            echo -e "${GREEN}${BOLD}  Altri hostname trovati:${RESET}"
+            while IFS= read -r d; do
+                [ -z "$d" ] && continue
+                [ "$d" = "$DETECTED_DOMAIN" ] && continue
+                echo -e "    ${BLUE}${d}${RESET}"
+            done <<< "$NMAP_DOMAINS"
+        fi
+        if [ -n "$WEB_URL" ]; then
+            echo -e "${GREEN}${BOLD}  Endpoint web:${RESET} ${CYAN}${WEB_URL}${RESET}"
+        fi
+        echo "$DETECTED_DOMAIN" >"$OUTDIR/detected_domain.txt"
+    else
+        echo -e "${YELLOW}${BOLD}  Nessun dominio rilevato da nmap${RESET}"
+        echo -e "${YELLOW}  Dovrai inserirlo manualmente per ffuf.${RESET}"
+    fi
+
+    echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════${RESET}"
+    echo
+}
+
 extract_open_ports() {
     awk -F'[/ ]' '
         /Ports:/ {
@@ -39,6 +99,106 @@ extract_open_ports() {
             }
         }
     ' "$1" | paste -sd,
+}
+
+extract_domains_from_nmap() {
+    local nmap_file="$1"
+    local target_ip="$2"
+
+    [ -f "$nmap_file" ] || return 0
+
+    {
+        grep -oE 'Nmap scan report for [^( ]+' "$nmap_file" \
+            | sed 's/Nmap scan report for //' \
+            | grep -vE '^[0-9.]+$'
+
+        grep -oiE 'commonName[=: ][^,/| ]+' "$nmap_file" \
+            | sed -E 's/commonName[=: ]//I'
+
+        grep -oiE 'DNS:[^,| ]+' "$nmap_file" \
+            | sed -E 's/DNS://I'
+
+        grep -oiE 'https?://[^/[:space:]"<>]+' "$nmap_file" \
+            | sed -E 's|https?://||I' \
+            | cut -d: -f1
+    } | grep -iEv 'localhost|^[0-9.]+$' \
+      | grep -E '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$' \
+      | grep -viF "$target_ip" \
+      | awk '{ print tolower($0) }' \
+      | sort -u
+}
+
+pick_base_domain() {
+    local domains="$1"
+    local domain line best=""
+
+    if [ -z "$domains" ]; then
+        return 1
+    fi
+
+    # Prefer lab-style TLDs, then shortest hostname (usually the box root domain)
+    while IFS= read -r domain; do
+        [ -z "$domain" ] && continue
+        if [[ "$domain" =~ \.(htb|htb\.cloud|local|corp|internal)$ ]]; then
+            if [ -z "$best" ] || [ "${#domain}" -lt "${#best}" ]; then
+                best="$domain"
+            fi
+        fi
+    done <<< "$domains"
+
+    if [ -n "$best" ]; then
+        echo "$best"
+        return 0
+    fi
+
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        if [ -z "$best" ] || [ "${#line}" -lt "${#best}" ]; then
+            best="$line"
+        fi
+    done <<< "$domains"
+
+    echo "$best"
+}
+
+extract_web_endpoint() {
+    local gnmap_file="$1"
+    local target_ip="$2"
+    local ports
+
+    [ -f "$gnmap_file" ] || return 0
+
+    ports=$(awk -F'[/ ]' '
+        /Ports:/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /\/open\/tcp/) {
+                    split($i, p, "/")
+                    print p[1]
+                }
+            }
+        }
+    ' "$gnmap_file")
+
+    if echo "$ports" | grep -qx 443; then
+        echo "https://${target_ip}:443"
+        return 0
+    fi
+    if echo "$ports" | grep -qx 80; then
+        echo "http://${target_ip}:80"
+        return 0
+    fi
+    if echo "$ports" | grep -qx 8080; then
+        echo "http://${target_ip}:8080"
+        return 0
+    fi
+    if echo "$ports" | grep -qx 8443; then
+        echo "https://${target_ip}:8443"
+        return 0
+    fi
+
+    local first
+    first=$(echo "$ports" | head -n1)
+    [ -n "$first" ] && echo "http://${target_ip}:${first}"
 }
 
 default_wordlist() {
@@ -59,26 +219,52 @@ default_wordlist() {
 
 show_ffuf_results() {
     local json_file="$1"
+    local domain="$2"
+    local log_file="$3"
     local found=0
 
-    if [ ! -s "$json_file" ]; then
-        echo -e "${RED}[!] No ffuf output file or empty results.${RESET}"
-        return 0
+    echo -e "${GREEN}[+] Subdomains / vhosts found:${RESET}"
+
+    if [ -f "$json_file" ] && [ -s "$json_file" ]; then
+        if command -v jq &>/dev/null; then
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                echo -e "    ${BOLD}${MAGENTA}$line${RESET}"
+                found=1
+            done < <(jq -r --arg d "$domain" '
+                .results[]?
+                | (.input.FUZZ // .input["FUZZ"] // empty) as $fuzz
+                | select($fuzz != null and $fuzz != "")
+                | (if ($fuzz | test($d)) then $fuzz else "\($fuzz).\($d)" end) as $host
+                | "\($host) [\(.status)] \(.length)b"
+            ' "$json_file" 2>/dev/null)
+        else
+            while IFS= read -r fuzz; do
+                [ -z "$fuzz" ] && continue
+                if [[ "$fuzz" == *"$domain" ]]; then
+                    echo -e "    ${BOLD}${MAGENTA}${fuzz}${RESET}"
+                else
+                    echo -e "    ${BOLD}${MAGENTA}${fuzz}.${domain}${RESET}"
+                fi
+                found=1
+            done < <(grep -oE '"FUZZ"[[:space:]]*:[[:space:]]*"[^"]*"' "$json_file" | sed -E 's/.*"([^"]*)"/\1/' | sort -u)
+        fi
     fi
 
-    echo -e "${GREEN}[+] Subdomains / vhosts found:${RESET}"
-    if command -v jq &>/dev/null; then
+    if [ -f "$log_file" ]; then
         while IFS= read -r line; do
             [ -z "$line" ] && continue
             echo -e "    ${BOLD}${MAGENTA}$line${RESET}"
             found=1
-        done < <(jq -r '.results[] | "\(.input.FUZZ // .input["FUZZ"]) [\(.status)] \(.length)b"' "$json_file" 2>/dev/null)
-    else
-        while IFS= read -r subdomain; do
-            [ -z "$subdomain" ] && continue
-            echo -e "    ${BOLD}${MAGENTA}$subdomain${RESET}"
-            found=1
-        done < <(grep -o '"FUZZ":"[^"]*"' "$json_file" | cut -d'"' -f4 | sort -u)
+        done < <(grep -E '^\s*\* FUZZ:' "$log_file" 2>/dev/null \
+            | sed -E 's/^\s*\* FUZZ:[[:space:]]*//' \
+            | while read -r fuzz; do
+                if [[ "$fuzz" == *"$domain" ]]; then
+                    echo "$fuzz"
+                else
+                    echo "${fuzz}.${domain}"
+                fi
+            done | sort -u)
     fi
 
     if [ "$found" -eq 0 ]; then
@@ -88,20 +274,22 @@ show_ffuf_results() {
 
 run_ffuf_enum() {
     local domain="$1"
-    local ffuf_target="$2"
+    local ffuf_url="$2"
     local wordlist="$3"
     local mode="$4"
     local out_json="$OUTDIR/ffuf_${domain//./_}.json"
+    local out_log="$OUTDIR/ffuf_${domain//./_}.log"
     local ffuf_cmd=()
 
     if [ "$mode" = "vhost" ]; then
         ffuf_cmd=(
             ffuf
             -w "$wordlist"
-            -u "http://${ffuf_target}"
+            -u "$ffuf_url"
             -H "Host: FUZZ.${domain}"
-            -mc 200,301,302,403
+            -ac
             -t 40
+            -v
             -o "$out_json"
             -of json
         )
@@ -110,8 +298,9 @@ run_ffuf_enum() {
             ffuf
             -w "$wordlist"
             -u "http://FUZZ.${domain}"
-            -mc 200,301,302,403
+            -ac
             -t 40
+            -v
             -o "$out_json"
             -of json
         )
@@ -127,10 +316,11 @@ run_ffuf_enum() {
         return 1
     fi
 
-    "${ffuf_cmd[@]}"
+    "${ffuf_cmd[@]}" 2>&1 | tee "$out_log"
     echo
-    show_ffuf_results "$out_json"
+    show_ffuf_results "$out_json" "$domain" "$out_log"
     echo -e "${GREEN}[+] ffuf output:${RESET} ${BLUE}$out_json${RESET}"
+    echo -e "${GREEN}[+] ffuf log:${RESET} ${BLUE}$out_log${RESET}"
 }
 
 TARGET="${1:-}"
@@ -150,6 +340,8 @@ DETAIL_SCAN="$OUTDIR/detail"
 UDP_SCAN="$OUTDIR/udp"
 UDP_PID=""
 UDP_LOG="$OUTDIR/udp.log"
+DETECTED_DOMAIN=""
+WEB_URL=""
 
 mkdir -p "$OUTDIR"
 
@@ -196,53 +388,77 @@ if ask_yes_no "Run UDP top-100 scan in background while continuing?"; then
     echo
 fi
 
-# --- Phase 3: optional ffuf subdomain enumeration (parallel to UDP) ---
-if ask_yes_no "Run ffuf third-level subdomain enumeration while scans continue?"; then
-    DOMAIN=""
-    read -rp "$(echo -e "${YELLOW}Enter base domain (e.g. target.htb): ${RESET}")" DOMAIN
-
-    if [ -n "$DOMAIN" ]; then
-        WORDLIST=""
-        DEFAULT_WL="$(default_wordlist || true)"
-        if [ -n "$DEFAULT_WL" ]; then
-            read -rp "$(echo -e "${YELLOW}Wordlist path [${DEFAULT_WL}]: ${RESET}")" WORDLIST
-            WORDLIST="${WORDLIST:-$DEFAULT_WL}"
-        else
-            read -rp "$(echo -e "${YELLOW}Wordlist path: ${RESET}")" WORDLIST
-        fi
-
-        if [ ! -f "$WORDLIST" ]; then
-            echo -e "${RED}[!] Wordlist not found: $WORDLIST${RESET}"
-        else
-            FFUF_MODE="vhost"
-            echo -e "${CYAN}ffuf mode:${RESET}"
-            echo -e "  ${BOLD}1)${RESET} vhost on IP ${TARGET} (Host: FUZZ.${DOMAIN})"
-            echo -e "  ${BOLD}2)${RESET} direct DNS (http://FUZZ.${DOMAIN})"
-            read -rp "$(echo -e "${YELLOW}Choose mode [1]: ${RESET}")" MODE_CHOICE
-            MODE_CHOICE="${MODE_CHOICE:-1}"
-            if [ "$MODE_CHOICE" = "2" ]; then
-                FFUF_MODE="direct"
-            fi
-
-            run_ffuf_enum "$DOMAIN" "$TARGET" "$WORDLIST" "$FFUF_MODE" || true
-        fi
-    else
-        echo -e "${YELLOW}[!] No domain provided. Skipping ffuf.${RESET}"
-    fi
-    echo
-fi
-
-# --- Phase 4: detailed TCP scan on open ports ---
+# --- Phase 3: detailed TCP scan (needed before ffuf to grab hostname/domain) ---
 if [ -n "$PORTS" ]; then
     DETAIL_CMD=(nmap -sCV -p "$PORTS" -oA "$DETAIL_SCAN" "$TARGET")
 
-    echo -e "${YELLOW}[+] Phase 4: detailed service scan on open ports${RESET}"
+    echo -e "${YELLOW}[+] Phase 3: detailed service scan on open ports${RESET}"
     print_cmd "${DETAIL_CMD[*]}"
     echo
 
     "${DETAIL_CMD[@]}"
     echo
+
+    echo -e "${YELLOW}[+] Extracting hostname/domain from nmap...${RESET}"
+    NMAP_SOURCE_FILE="$DETAIL_SCAN.nmap"
+    NMAP_DOMAINS=$(extract_domains_from_nmap "$NMAP_SOURCE_FILE" "$TARGET" || true)
+    DETECTED_DOMAIN=$(pick_base_domain "$NMAP_DOMAINS" || true)
+    WEB_URL=$(extract_web_endpoint "$DETAIL_SCAN.gnmap" "$TARGET" || true)
+    print_domain_detection "$NMAP_SOURCE_FILE"
+else
+    NMAP_SOURCE_FILE="$FULL_SCAN.nmap"
+    NMAP_DOMAINS=$(extract_domains_from_nmap "$NMAP_SOURCE_FILE" "$TARGET" || true)
+    DETECTED_DOMAIN=$(pick_base_domain "$NMAP_DOMAINS" || true)
+    WEB_URL="http://${TARGET}"
+    print_domain_detection "$NMAP_SOURCE_FILE"
 fi
+
+# --- Phase 4: ffuf subdomain enumeration on detected domain ---
+RUN_FFUF=false
+DOMAIN=""
+
+if [ -n "$DETECTED_DOMAIN" ]; then
+    if ask_yes_no_default_yes "Avviare ffuf sui sottodomini di ${BOLD}${DETECTED_DOMAIN}${RESET}?"; then
+        RUN_FFUF=true
+        DOMAIN="$DETECTED_DOMAIN"
+    fi
+elif ask_yes_no "Nessun dominio rilevato. Vuoi comunque lanciare ffuf inserendo il dominio a mano?"; then
+    RUN_FFUF=true
+    read -rp "$(echo -e "${YELLOW}Inserisci il dominio base (es. target.htb): ${RESET}")" DOMAIN
+fi
+
+if [ "$RUN_FFUF" = true ] && [ -n "$DOMAIN" ]; then
+    WORDLIST=""
+    DEFAULT_WL="$(default_wordlist || true)"
+    if [ -n "$DEFAULT_WL" ]; then
+        read -rp "$(echo -e "${YELLOW}Wordlist [${DEFAULT_WL}]: ${RESET}")" WORDLIST
+        WORDLIST="${WORDLIST:-$DEFAULT_WL}"
+    else
+        read -rp "$(echo -e "${YELLOW}Percorso wordlist: ${RESET}")" WORDLIST
+    fi
+
+    if [ ! -f "$WORDLIST" ]; then
+        echo -e "${RED}[!] Wordlist non trovata: $WORDLIST${RESET}"
+    else
+        FFUF_URL="${WEB_URL:-http://${TARGET}}"
+        FFUF_MODE="vhost"
+        echo -e "${CYAN}Modalità ffuf:${RESET}"
+        echo -e "  ${BOLD}1)${RESET} vhost su ${FFUF_URL} (Host: FUZZ.${DOMAIN})"
+        echo -e "  ${BOLD}2)${RESET} DNS diretto (http://FUZZ.${DOMAIN})"
+        read -rp "$(echo -e "${YELLOW}Scegli modalità [1]: ${RESET}")" MODE_CHOICE
+        MODE_CHOICE="${MODE_CHOICE:-1}"
+        if [ "$MODE_CHOICE" = "2" ]; then
+            FFUF_MODE="direct"
+        fi
+
+        echo
+        echo -e "${GREEN}[+] Avvio ffuf su dominio:${RESET} ${BOLD}${DOMAIN}${RESET}"
+        run_ffuf_enum "$DOMAIN" "$FFUF_URL" "$WORDLIST" "$FFUF_MODE" || true
+    fi
+elif [ "$RUN_FFUF" = true ]; then
+    echo -e "${YELLOW}[!] Dominio non specificato. ffuf saltato.${RESET}"
+fi
+echo
 
 # --- Wait for background UDP if still running ---
 if [ -n "$UDP_PID" ]; then
@@ -284,12 +500,15 @@ if [ -n "$PORTS" ]; then
     echo -e "    ${BLUE}$DETAIL_SCAN.gnmap${RESET}"
     echo -e "    ${BLUE}$DETAIL_SCAN.xml${RESET}"
 fi
+if [ -f "$OUTDIR/detected_domain.txt" ]; then
+    echo -e "    ${BLUE}$OUTDIR/detected_domain.txt${RESET} ${CYAN}($(cat "$OUTDIR/detected_domain.txt"))${RESET}"
+fi
 if [ -n "$UDP_PID" ]; then
     echo -e "    ${BLUE}$UDP_SCAN.nmap${RESET}"
     echo -e "    ${BLUE}$UDP_SCAN.gnmap${RESET}"
     echo -e "    ${BLUE}$UDP_SCAN.xml${RESET}"
     echo -e "    ${BLUE}$UDP_LOG${RESET}"
 fi
-for f in "$OUTDIR"/ffuf_*.json; do
+for f in "$OUTDIR"/ffuf_*; do
     [ -f "$f" ] && echo -e "    ${BLUE}$f${RESET}"
 done
