@@ -86,7 +86,7 @@ def run_menu(state: ScanState) -> ScanState | None:
         "2": ("Detail scan (-sCV)", lambda: nmap.run_detail_tcp(state)),
         "3": ("UDP top-100 (foreground)", lambda: nmap.run_udp(state, background=False)),
         "4": ("UDP top-100 (background)", lambda: nmap.run_udp(state, background=True)),
-        "5": ("Estrai dominio da nmap", lambda: nmap.update_domain_from_nmap(state) or True),
+        "5": ("Estrai dominio da nmap + /etc/hosts", lambda: nmap.update_domain_from_nmap(state, offer_hosts=True) or True),
         "6": ("FFuf subdomains", lambda: ffuf.run_ffuf(state)),
         "7": ("Pipeline completa", lambda: pipeline.run_pipeline(state) or True),
         "8": ("Mostra file generati", lambda: _show_files(state) or True),
@@ -99,7 +99,7 @@ def run_menu(state: ScanState) -> ScanState | None:
         print(c("  2) Detail scan (-sCV)", C.BOLD))
         print(c("  3) UDP top-100 (foreground)", C.BOLD))
         print(c("  4) UDP top-100 (background)", C.BOLD))
-        print(c("  5) Estrai dominio da nmap", C.BOLD))
+        print(c("  5) Estrai dominio da nmap + /etc/hosts", C.BOLD))
         print(c("  6) FFuf subdomains", C.BOLD))
         print(c("  7) Pipeline completa", C.BOLD))
         print(c("  8) Mostra file generati", C.BOLD))

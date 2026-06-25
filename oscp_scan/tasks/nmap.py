@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from oscp_scan import hosts
 from oscp_scan.parsers import nmap as nmap_parser
 from oscp_scan.state import ScanState
 from oscp_scan.ui import C, c, print_cmd
@@ -101,7 +102,7 @@ def run_udp(state: ScanState, *, background: bool = False) -> bool:
     return True
 
 
-def update_domain_from_nmap(state: ScanState) -> None:
+def update_domain_from_nmap(state: ScanState, *, offer_hosts: bool = False) -> None:
     detail_nmap = Path(f"{state.detail_prefix}.nmap")
     full_nmap = Path(f"{state.full_prefix}.nmap")
     gnmap = Path(f"{state.detail_prefix}.gnmap")
@@ -119,6 +120,8 @@ def update_domain_from_nmap(state: ScanState) -> None:
         state.web_url = f"http://{state.target}"
     state.save()
     print_domain_detection(state, source)
+    if offer_hosts:
+        hosts.offer_hosts_update(state)
 
 
 def print_domain_detection(state: ScanState, nmap_file: Path) -> None:
