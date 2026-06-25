@@ -1,1 +1,5 @@
 oscp_scan_*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
