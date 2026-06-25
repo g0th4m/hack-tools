@@ -140,6 +140,44 @@ def _pick_target(target: str | None = None) -> ScanState | None:
     return state
 
 
+def _parse_choices(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _run_action(state: ScanState, choice: str, actions: dict[str, object]) -> ScanState | None:
+    """Run one menu action. Returns None to exit, or updated state."""
+    if choice == "0":
+        print(c("Bye.", C.GREEN))
+        return None
+
+    if choice == "9":
+        new_state = _pick_target()
+        return new_state if new_state else state
+
+    if choice == "10":
+        print()
+        print(c("── Clean up target files ──", C.YELLOW, C.BOLD))
+        try:
+            return cleanup.run_cleanup(state)
+        except KeyboardInterrupt:
+            print(c("\n[!] Interrupted.", C.YELLOW))
+            return state
+
+    if choice not in actions:
+        print(c(f"[!] Invalid choice: {choice}", C.RED))
+        return state
+
+    label = next(item[1] for item in MENU_ITEMS if item[0] == choice)
+    print()
+    print(c(f"── {label} ──", C.YELLOW, C.BOLD))
+    try:
+        actions[choice]()
+        return ScanState.load(state.outdir)
+    except KeyboardInterrupt:
+        print(c("\n[!] Interrupted.", C.YELLOW))
+        return state
+
+
 def run_menu(state: ScanState) -> ScanState | None:
     actions = {
         "1": lambda: nmap.run_full_tcp(state),
@@ -165,38 +203,39 @@ def run_menu(state: ScanState) -> ScanState | None:
                 print(f"  {key}) {icon} {c(label, C.BOLD)}{done_tag}")
 
         print()
+        print(c("  Tip: run multiple tasks with commas, e.g. 1,2,5", C.CYAN))
+        print()
         choice = ask("Choice", "7")
-        if choice == "0":
+        choices = _parse_choices(choice)
+
+        if not choices:
+            print(c("[!] Invalid choice.", C.RED))
+            pause()
+            continue
+
+        if len(choices) == 1:
+            result = _run_action(state, choices[0], actions)
+            if result is None:
+                return None
+            state = result
+            pause()
+            continue
+
+        if "0" in choices:
             print(c("Bye.", C.GREEN))
             return None
-        if choice == "9":
-            new_state = _pick_target()
-            if new_state:
-                return new_state
-            pause()
-            continue
-        if choice == "10":
-            print()
-            print(c("── Clean up target files ──", C.YELLOW, C.BOLD))
-            try:
-                state = cleanup.run_cleanup(state)
-            except KeyboardInterrupt:
-                print(c("\n[!] Interrupted.", C.YELLOW))
-            pause()
-            continue
-        if choice in actions:
-            label = next(item[1] for item in MENU_ITEMS if item[0] == choice)
-            print()
-            print(c(f"── {label} ──", C.YELLOW, C.BOLD))
-            try:
-                actions[choice]()
-                state = ScanState.load(state.outdir)
-            except KeyboardInterrupt:
-                print(c("\n[!] Interrupted.", C.YELLOW))
-            pause()
-            continue
-        print(c("[!] Invalid choice.", C.RED))
+
+        print()
+        print(c(f"[+] Running {len(choices)} task(s): {', '.join(choices)}", C.GREEN, C.BOLD))
+        for i, item in enumerate(choices, 1):
+            print(c(f"\n── Batch {i}/{len(choices)}: option {item} ──", C.MAGENTA, C.BOLD))
+            result = _run_action(state, item, actions)
+            if result is None:
+                return None
+            state = result
+
         pause()
+        continue
 
 
 def main(argv: list[str] | None = None) -> None:
