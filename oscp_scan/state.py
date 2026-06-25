@@ -40,6 +40,8 @@ class ScanState:
     web_url: str | None = None
     tasks_done: list[str] = field(default_factory=list)
     task_history: dict[str, str] = field(default_factory=dict)
+    task_commands: dict[str, str] = field(default_factory=dict)
+    command_log: list[dict[str, str]] = field(default_factory=list)
     updated_at: str = ""
 
     def __post_init__(self) -> None:
@@ -79,11 +81,23 @@ class ScanState:
     def ensure_outdir(self) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
 
-    def mark_task(self, task: str) -> None:
+    def mark_task(self, task: str, *, command: str | None = None) -> None:
         if task not in self.tasks_done:
             self.tasks_done.append(task)
         self.task_history[task] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        if command:
+            self.task_commands[task] = command
         self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.save()
+
+    def log_command(self, task: str, command: str, *, success: bool) -> None:
+        entry = {
+            "task": task,
+            "command": command,
+            "at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "success": "yes" if success else "no",
+        }
+        self.command_log.append(entry)
         self.save()
 
     def save(self) -> None:
@@ -105,6 +119,8 @@ class ScanState:
         if state_file.exists():
             data: dict[str, Any] = json.loads(state_file.read_text(encoding="utf-8"))
             data.setdefault("task_history", {})
+            data.setdefault("task_commands", {})
+            data.setdefault("command_log", [])
             return cls(**data)
 
         target = outdir.name.removeprefix("oscp_scan_")

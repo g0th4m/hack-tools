@@ -17,7 +17,7 @@ MENU_ITEMS: list[tuple[str, str, tuple[str, ...]]] = [
     ("5", "Extract domain + update /etc/hosts", ("domain_extracted",)),
     ("6", "FFuf subdomains", ("ffuf",)),
     ("7", "Full pipeline", ("pipeline",)),
-    ("8", "Show generated files", ()),
+    ("8", "Show files & command history", ()),
     ("9", "Change target", ()),
     ("10", "Clean up target files", ()),
     ("0", "Exit", ()),
@@ -56,7 +56,10 @@ def _progress_panel(state: ScanState) -> None:
         if state.is_done(task_id) or (task_id == "udp" and state.is_done("udp_bg_started")):
             when = state.task_history.get(task_id) or state.task_history.get("udp_bg_started", "")
             stamp = c(f" @ {when}", C.CYAN) if when else ""
+            cmd = state.task_commands.get(task_id) or state.task_commands.get("udp_bg_started", "")
             print(c("  ✓", C.GREEN), label + stamp)
+            if cmd:
+                print(c(f"      $ {cmd}", C.BLUE))
         else:
             print(c("  ○", C.YELLOW), c(label, C.YELLOW))
     print()
@@ -75,12 +78,25 @@ def _status_line(state: ScanState) -> None:
 
 def _show_files(state: ScanState) -> None:
     print(c("[+] Generated files:", C.GREEN))
-    if not state.path.exists():
+    if state.path.exists():
+        for path in sorted(state.path.rglob("*")):
+            if path.is_file():
+                print(c(f"    {path}", C.BLUE))
+    else:
+        print(c("    (none)", C.YELLOW))
+
+    print()
+    print(c("[+] Command history:", C.GREEN))
+    if not state.command_log:
         print(c("    (none)", C.YELLOW))
         return
-    for path in sorted(state.path.rglob("*")):
-        if path.is_file():
-            print(c(f"    {path}", C.BLUE))
+
+    for entry in state.command_log:
+        ok = entry.get("success") == "yes"
+        status = c("OK", C.GREEN) if ok else c("FAIL", C.RED)
+        label = TASK_LABELS.get(entry["task"], entry["task"])
+        print(c(f"    [{status}] {label} @ {entry['at']}", C.CYAN))
+        print(c(f"         {entry['command']}", C.BLUE))
 
 
 def _pick_existing_scan() -> ScanState | None:

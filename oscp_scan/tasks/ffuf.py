@@ -7,9 +7,10 @@ import re
 import shutil
 from pathlib import Path
 
+from oscp_scan.commands import cmd_to_string, confirm_command
 from oscp_scan.ffuf_runner import run_ffuf_with_progress
 from oscp_scan.state import ScanState
-from oscp_scan.ui import C, ask, c, print_cmd
+from oscp_scan.ui import C, ask, c
 from oscp_scan.wordlists import count_wordlist_lines, pick_wordlist
 
 
@@ -115,7 +116,12 @@ def run_ffuf(
     print()
     print(c(f"[+] Starting ffuf on domain: {domain}", C.GREEN, C.BOLD))
     print(c(f"[+] Wordlist: {wordlist} ({wordlist_lines:,} lines)", C.CYAN))
-    print_cmd(cmd)
+
+    confirmed = confirm_command(cmd)
+    if confirmed is None:
+        return False
+
+    cmd = confirmed
     print()
 
     returncode = run_ffuf_with_progress(
@@ -124,9 +130,13 @@ def run_ffuf(
         wordlist_lines=wordlist_lines,
     )
 
+    command_str = cmd_to_string(cmd)
+    state.log_command("ffuf", command_str, success=returncode == 0)
+
     print()
     show_results(out_json, out_log, domain)
     print(c(f"[+] Output: {out_json}", C.GREEN))
     print(c(f"[+] Log: {out_log}", C.GREEN))
-    state.mark_task("ffuf")
+    if returncode == 0:
+        state.mark_task("ffuf", command=command_str)
     return returncode == 0

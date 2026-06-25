@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 from oscp_scan import hosts
+from oscp_scan.commands import run_confirmed, run_confirmed_background
 from oscp_scan.parsers import nmap as nmap_parser
 from oscp_scan.state import ScanState
-from oscp_scan.ui import C, c, print_cmd
+from oscp_scan.ui import C, c
 
 
 def _require_nmap() -> bool:
@@ -19,12 +19,6 @@ def _require_nmap() -> bool:
     return False
 
 
-def _run(cmd: list[str]) -> int:
-    print_cmd(cmd)
-    print()
-    return subprocess.run(cmd).returncode
-
-
 def run_full_tcp(state: ScanState) -> bool:
     if not _require_nmap():
         return False
@@ -32,11 +26,13 @@ def run_full_tcp(state: ScanState) -> bool:
     prefix = str(state.full_prefix)
     cmd = ["nmap", "-p-", "--min-rate", "5000", "-oA", prefix, state.target]
     print(c("[+] Full TCP port scan", C.YELLOW, C.BOLD))
-    if _run(cmd) != 0:
+
+    returncode, command_str = run_confirmed(state, "full_tcp", cmd)
+    if returncode != 0:
         return False
 
     state.ports_tcp = nmap_parser.extract_open_ports(Path(f"{prefix}.gnmap"))
-    state.mark_task("full_tcp")
+    state.mark_task("full_tcp", command=command_str)
 
     if state.ports_tcp:
         ports = ",".join(str(p) for p in state.ports_tcp)
@@ -62,10 +58,12 @@ def run_detail_tcp(state: ScanState) -> bool:
     prefix = str(state.detail_prefix)
     cmd = ["nmap", "-sCV", "-p", ports, "-oA", prefix, state.target]
     print(c("[+] Detailed TCP scan (-sCV)", C.YELLOW, C.BOLD))
-    if _run(cmd) != 0:
+
+    returncode, command_str = run_confirmed(state, "detail_tcp", cmd)
+    if returncode != 0:
         return False
 
-    state.mark_task("detail_tcp")
+    state.mark_task("detail_tcp", command=command_str)
     update_domain_from_nmap(state)
     return True
 
@@ -80,20 +78,19 @@ def run_udp(state: ScanState, *, background: bool = False) -> bool:
     print(c("[+] UDP top-100 scan", C.YELLOW, C.BOLD))
 
     if background:
-        print_cmd(cmd)
-        print(c(f"    Log: {log_file}", C.CYAN))
-        print()
-        with log_file.open("w", encoding="utf-8") as log:
-            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+        proc, command_str = run_confirmed_background(state, "udp_bg_started", cmd, log_file)
+        if proc is None:
+            return False
+        state.mark_task("udp_bg_started", command=command_str)
         print(c(f"[+] UDP running in background (PID {proc.pid})", C.GREEN))
-        state.mark_task("udp_bg_started")
         return True
 
-    if _run(cmd) != 0:
+    returncode, command_str = run_confirmed(state, "udp", cmd)
+    if returncode != 0:
         return False
 
     state.ports_udp = nmap_parser.extract_open_ports(Path(f"{prefix}.gnmap"), "udp")
-    state.mark_task("udp")
+    state.mark_task("udp", command=command_str)
     if state.ports_udp:
         ports = ",".join(str(p) for p in state.ports_udp)
         print(c(f"[+] Open UDP ports: {ports}", C.GREEN))
