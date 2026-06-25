@@ -8,6 +8,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+TASK_LABELS: dict[str, str] = {
+    "full_tcp": "Full TCP scan",
+    "detail_tcp": "Detail scan (-sCV)",
+    "udp": "UDP top-100",
+    "udp_bg_started": "UDP top-100 (background)",
+    "domain_extracted": "Domain extracted",
+    "hosts_updated": "/etc/hosts updated",
+    "ffuf": "FFuf subdomains",
+    "pipeline": "Full pipeline",
+}
+
+TRACKED_TASKS = (
+    "full_tcp",
+    "detail_tcp",
+    "udp",
+    "domain_extracted",
+    "hosts_updated",
+    "ffuf",
+)
+
 
 @dataclass
 class ScanState:
@@ -19,6 +39,7 @@ class ScanState:
     all_domains: list[str] = field(default_factory=list)
     web_url: str | None = None
     tasks_done: list[str] = field(default_factory=list)
+    task_history: dict[str, str] = field(default_factory=dict)
     updated_at: str = ""
 
     def __post_init__(self) -> None:
@@ -45,12 +66,23 @@ class ScanState:
     def udp_prefix(self) -> Path:
         return self.path / "udp"
 
+    def is_done(self, *tasks: str) -> bool:
+        return any(task in self.tasks_done for task in tasks)
+
+    def done_count(self) -> tuple[int, int]:
+        done = sum(
+            1 for task in TRACKED_TASKS
+            if self.is_done(task) or (task == "udp" and self.is_done("udp_bg_started"))
+        )
+        return done, len(TRACKED_TASKS)
+
     def ensure_outdir(self) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
 
     def mark_task(self, task: str) -> None:
         if task not in self.tasks_done:
             self.tasks_done.append(task)
+        self.task_history[task] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         self.updated_at = datetime.now(timezone.utc).isoformat()
         self.save()
 
@@ -72,6 +104,7 @@ class ScanState:
         state_file = outdir / "state.json"
         if state_file.exists():
             data: dict[str, Any] = json.loads(state_file.read_text(encoding="utf-8"))
+            data.setdefault("task_history", {})
             return cls(**data)
 
         target = outdir.name.removeprefix("oscp_scan_")

@@ -30,7 +30,7 @@ def _full_host(fuzz: str, domain: str) -> str:
 
 
 def show_results(json_file: Path, log_file: Path, domain: str) -> None:
-    print(c("[+] Subdomains / vhosts trovati:", C.GREEN))
+    print(c("[+] Subdomains / vhosts found:", C.GREEN))
     found: set[str] = set()
 
     if json_file.is_file() and json_file.stat().st_size > 0:
@@ -57,7 +57,7 @@ def show_results(json_file: Path, log_file: Path, domain: str) -> None:
         for entry in sorted(found):
             print(c(f"    {entry}", C.MAGENTA, C.BOLD))
     else:
-        print(c("    (nessuno)", C.YELLOW))
+        print(c("    (none)", C.YELLOW))
 
 
 def run_ffuf(
@@ -68,20 +68,20 @@ def run_ffuf(
     mode: str | None = None,
 ) -> bool:
     if not shutil.which("ffuf"):
-        print(c("[!] ffuf non trovato in PATH.", C.RED))
+        print(c("[!] ffuf not found in PATH.", C.RED))
         return False
 
     domain = domain or state.detected_domain
     if not domain:
-        domain = ask("Inserisci il dominio base (es. target.htb)")
+        domain = ask("Enter base domain (e.g. target.htb)")
     if not domain:
-        print(c("[!] Dominio non specificato.", C.YELLOW))
+        print(c("[!] No domain specified.", C.YELLOW))
         return False
 
     wl_default = default_wordlist() or ""
     wordlist = wordlist or ask("Wordlist", wl_default)
     if not wordlist or not Path(wordlist).is_file():
-        print(c(f"[!] Wordlist non trovata: {wordlist}", C.RED))
+        print(c(f"[!] Wordlist not found: {wordlist}", C.RED))
         return False
 
     ffuf_url = state.web_url or f"http://{state.target}"
@@ -90,10 +90,10 @@ def run_ffuf(
     out_log = state.path / f"ffuf_{safe_name}.log"
 
     if mode is None:
-        print(c("Modalità ffuf:", C.CYAN))
-        print(c(f"  1) vhost su {ffuf_url} (Host: FUZZ.{domain})", C.BOLD))
-        print(c(f"  2) DNS diretto (http://FUZZ.{domain})", C.BOLD))
-        choice = ask("Scegli modalità", "1")
+        print(c("FFuf mode:", C.CYAN))
+        print(c(f"  1) vhost on {ffuf_url} (Host: FUZZ.{domain})", C.BOLD))
+        print(c(f"  2) direct DNS (http://FUZZ.{domain})", C.BOLD))
+        choice = ask("Choose mode", "1")
         mode = "direct" if choice == "2" else "vhost"
 
     if mode == "vhost":
@@ -111,7 +111,7 @@ def run_ffuf(
         ]
 
     print()
-    print(c(f"[+] Avvio ffuf su dominio: {domain}", C.GREEN, C.BOLD))
+    print(c(f"[+] Starting ffuf on domain: {domain}", C.GREEN, C.BOLD))
     print_cmd(cmd)
     print()
 

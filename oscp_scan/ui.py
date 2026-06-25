@@ -42,8 +42,8 @@ def ask_yes_no(prompt: str, *, default: bool = False) -> bool:
     value = input(c(f"{prompt} [{hint}]: ", C.YELLOW)).strip().lower()
     if not value:
         return default
-    return value in ("y", "yes", "s", "si")
+    return value in ("y", "yes")
 
 
 def pause() -> None:
-    input(c("\nPremi Invio per continuare...", C.CYAN))
+    input(c("\nPress Enter to continue...", C.CYAN))

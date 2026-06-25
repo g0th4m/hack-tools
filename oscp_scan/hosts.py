@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from oscp_scan.parsers.nmap import filter_domains
 from oscp_scan.state import ScanState
 from oscp_scan.ui import C, ask_yes_no, c
 
@@ -26,11 +27,11 @@ def preview_hosts(*, title: str = "/etc/hosts") -> None:
     try:
         content = read_hosts()
     except PermissionError:
-        print(c("[!] Impossibile leggere /etc/hosts.", C.RED))
+        print(c("[!] Cannot read /etc/hosts.", C.RED))
         return
 
     if not content.strip():
-        print(c("(file vuoto o non leggibile)", C.YELLOW))
+        print(c("(empty or unreadable file)", C.YELLOW))
     else:
         for i, line in enumerate(content.splitlines(), 1):
             styled = line
@@ -57,7 +58,7 @@ def _remove_hacktools_block(lines: list[str], ip: str) -> list[str]:
 
 
 def build_hosts_content(current: str, ip: str, domains: list[str]) -> str:
-    domains = sorted(set(d.strip().lower() for d in domains if d.strip()))
+    domains = filter_domains(sorted(set(d.strip().lower() for d in domains if d.strip())))
     if not domains:
         return current
 
@@ -79,13 +80,13 @@ def build_hosts_content(current: str, ip: str, domains: list[str]) -> str:
 def _write_hosts(content: str) -> bool:
     try:
         HOSTS_PATH.write_text(content, encoding="utf-8")
-        print(c("[+] /etc/hosts aggiornato.", C.GREEN))
+        print(c("[+] /etc/hosts updated.", C.GREEN))
         return True
     except PermissionError:
         pass
 
-    print(c("[!] Servono permessi root per scrivere /etc/hosts.", C.YELLOW))
-    if not ask_yes_no("Usare sudo?", default=True):
+    print(c("[!] Root privileges required to write /etc/hosts.", C.YELLOW))
+    if not ask_yes_no("Use sudo?", default=True):
         return False
 
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".hosts") as tmp:
@@ -100,38 +101,57 @@ def _write_hosts(content: str) -> bool:
     Path(tmp_path).unlink(missing_ok=True)
 
     if result.returncode != 0:
-        err = result.stderr.strip() or "errore sconosciuto"
-        print(c(f"[!] Scrittura fallita: {err}", C.RED))
+        err = result.stderr.strip() or "unknown error"
+        print(c(f"[!] Write failed: {err}", C.RED))
         return False
 
-    print(c("[+] /etc/hosts aggiornato con sudo.", C.GREEN))
+    print(c("[+] /etc/hosts updated with sudo.", C.GREEN))
     return True
+
+
+def remove_hosts_entry(ip: str) -> bool:
+    """Remove the hack-tools block for *ip* from /etc/hosts."""
+    try:
+        current = read_hosts()
+    except PermissionError:
+        print(c("[!] Cannot read /etc/hosts.", C.RED))
+        return False
+
+    lines = current.splitlines()
+    new_lines = _remove_hacktools_block(lines, ip)
+    if new_lines == lines:
+        return False
+
+    new_content = "\n".join(new_lines)
+    if new_content and not new_content.endswith("\n"):
+        new_content += "\n"
+    return _write_hosts(new_content)
 
 
 def offer_hosts_update(state: ScanState) -> None:
     preview_hosts()
 
-    domains = list(state.all_domains)
+    domains = filter_domains(list(state.all_domains))
     if not domains and state.detected_domain:
-        domains = [state.detected_domain]
+        domains = filter_domains([state.detected_domain])
 
     if not domains:
-        print(c("[!] Nessun dominio da aggiungere a /etc/hosts.", C.YELLOW))
+        print(c("[!] No domains to add to /etc/hosts.", C.YELLOW))
         return
 
     new_content = build_hosts_content(read_hosts(), state.target, domains)
     marker = f"{MARKER_PREFIX} {state.target}"
     entry_line = f"{state.target} {' '.join(sorted(set(domains)))}"
 
-    print(c("[+] Voci proposte per /etc/hosts:", C.GREEN, C.BOLD))
+    print(c("[+] Proposed /etc/hosts entries:", C.GREEN, C.BOLD))
     print(c(f"    {marker}", C.CYAN))
     print(c(f"    {entry_line}", C.MAGENTA, C.BOLD))
     print()
 
-    if not ask_yes_no(f"Aggiungere {len(domains)} dominio/i per {state.target}?", default=True):
-        print(c("[!] /etc/hosts non modificato.", C.YELLOW))
+    if not ask_yes_no(f"Add {len(domains)} domain(s) for {state.target}?", default=True):
+        print(c("[!] /etc/hosts left unchanged.", C.YELLOW))
         return
 
     if _write_hosts(new_content):
         state.mark_task("hosts_updated")
-        preview_hosts(title="/etc/hosts (aggiornato)")
+        preview_hosts(title="/etc/hosts (updated)")

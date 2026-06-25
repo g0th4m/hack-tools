@@ -11,7 +11,7 @@ def run_pipeline(state: ScanState) -> None:
     if not nmap.run_full_tcp(state):
         return
 
-    udp_bg = ask_yes_no("UDP top-100 in background mentre continui?", default=False)
+    udp_bg = ask_yes_no("Run UDP top-100 in background while continuing?", default=False)
     if udp_bg:
         nmap.run_udp(state, background=True)
 
@@ -22,9 +22,9 @@ def run_pipeline(state: ScanState) -> None:
         nmap.update_domain_from_nmap(state)
 
     if state.detected_domain:
-        if ask_yes_no(f"Avviare ffuf sui sottodomini di {state.detected_domain}?", default=True):
+        if ask_yes_no(f"Run ffuf on subdomains of {state.detected_domain}?", default=True):
             ffuf.run_ffuf(state, domain=state.detected_domain)
-    elif ask_yes_no("Nessun dominio rilevato. Lanciare ffuf manualmente?", default=False):
+    elif ask_yes_no("No domain detected. Run ffuf manually?", default=False):
         ffuf.run_ffuf(state)
 
     if udp_bg and not state.ports_udp:
@@ -33,3 +33,5 @@ def run_pipeline(state: ScanState) -> None:
             from oscp_scan.parsers import nmap as nmap_parser
             state.ports_udp = nmap_parser.extract_open_ports(gnmap, "udp")
             state.save()
+
+    state.mark_task("pipeline")

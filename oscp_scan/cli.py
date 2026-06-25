@@ -5,9 +5,23 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from oscp_scan.state import ScanState
-from oscp_scan.tasks import ffuf, nmap, pipeline
+from oscp_scan.state import TASK_LABELS, ScanState
+from oscp_scan.tasks import cleanup, ffuf, nmap, pipeline
 from oscp_scan.ui import C, ask, ask_yes_no, c, pause
+
+MENU_ITEMS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("1", "Full TCP scan (-p-)", ("full_tcp",)),
+    ("2", "Detail scan (-sCV)", ("detail_tcp",)),
+    ("3", "UDP top-100 (foreground)", ("udp",)),
+    ("4", "UDP top-100 (background)", ("udp_bg_started", "udp")),
+    ("5", "Extract domain + update /etc/hosts", ("domain_extracted",)),
+    ("6", "FFuf subdomains", ("ffuf",)),
+    ("7", "Full pipeline", ("pipeline",)),
+    ("8", "Show generated files", ()),
+    ("9", "Change target", ()),
+    ("10", "Clean up target files", ()),
+    ("0", "Exit", ()),
+]
 
 
 def _banner() -> None:
@@ -18,22 +32,51 @@ def _banner() -> None:
     print()
 
 
+def _task_icon(state: ScanState, tasks: tuple[str, ...]) -> str:
+    if not tasks:
+        return "  "
+    if state.is_done(*tasks):
+        return c("✓", C.GREEN, C.BOLD)
+    return c("○", C.YELLOW)
+
+
+def _progress_panel(state: ScanState) -> None:
+    done, total = state.done_count()
+    bar_width = 20
+    filled = int(bar_width * done / total) if total else 0
+    bar = c("█" * filled, C.GREEN) + c("░" * (bar_width - filled), C.YELLOW)
+
+    print(c("Progress", C.BOLD), f"[{bar}] {done}/{total}")
+    for task_id in (
+        "full_tcp", "detail_tcp", "udp", "domain_extracted", "hosts_updated", "ffuf",
+    ):
+        label = TASK_LABELS.get(task_id, task_id)
+        if task_id == "udp" and state.is_done("udp_bg_started") and not state.is_done("udp"):
+            label += " (running in background)"
+        if state.is_done(task_id) or (task_id == "udp" and state.is_done("udp_bg_started")):
+            when = state.task_history.get(task_id) or state.task_history.get("udp_bg_started", "")
+            stamp = c(f" @ {when}", C.CYAN) if when else ""
+            print(c("  ✓", C.GREEN), label + stamp)
+        else:
+            print(c("  ○", C.YELLOW), c(label, C.YELLOW))
+    print()
+
+
 def _status_line(state: ScanState) -> None:
     tcp = ",".join(str(p) for p in state.ports_tcp) or "-"
     udp = ",".join(str(p) for p in state.ports_udp) or "-"
     domain = state.detected_domain or "-"
-    done = ", ".join(state.tasks_done) or "-"
     print(c(f"Target: {state.target}", C.GREEN, C.BOLD))
     print(c(f"Output: {state.outdir}", C.BLUE))
-    print(c(f"Dominio: {domain}  |  TCP: {tcp}  |  UDP: {udp}", C.CYAN))
-    print(c(f"Task completati: {done}", C.CYAN))
+    print(c(f"Domain: {domain}  |  TCP: {tcp}  |  UDP: {udp}", C.CYAN))
     print()
+    _progress_panel(state)
 
 
 def _show_files(state: ScanState) -> None:
-    print(c("[+] File generati:", C.GREEN))
+    print(c("[+] Generated files:", C.GREEN))
     if not state.path.exists():
-        print(c("    (nessun file)", C.YELLOW))
+        print(c("    (none)", C.YELLOW))
         return
     for path in sorted(state.path.rglob("*")):
         if path.is_file():
@@ -43,18 +86,19 @@ def _show_files(state: ScanState) -> None:
 def _pick_existing_scan() -> ScanState | None:
     scans = ScanState.find_existing()
     if not scans:
-        print(c("[!] Nessuno scan esistente nella directory corrente.", C.YELLOW))
+        print(c("[!] No existing scans in the current directory.", C.YELLOW))
         return None
 
-    print(c("[+] Scan esistenti:", C.GREEN))
+    print(c("[+] Existing scans:", C.GREEN))
     for i, scan in enumerate(scans, 1):
         domain = scan.detected_domain or "-"
         tcp = ",".join(str(p) for p in scan.ports_tcp) or "-"
-        print(c(f"  {i}) {scan.target}  dominio={domain}  tcp={tcp}", C.BLUE))
+        done, total = scan.done_count()
+        print(c(f"  {i}) {scan.target}  domain={domain}  tcp={tcp}  progress={done}/{total}", C.BLUE))
 
-    choice = ask("Seleziona numero")
+    choice = ask("Select number")
     if not choice.isdigit() or not (1 <= int(choice) <= len(scans)):
-        print(c("[!] Selezione non valida.", C.RED))
+        print(c("[!] Invalid selection.", C.RED))
         return None
     return scans[int(choice) - 1]
 
@@ -65,49 +109,47 @@ def _pick_target(target: str | None = None) -> ScanState | None:
         return ScanState.load(outdir) if outdir.exists() else ScanState.new(target)
 
     print()
-    print(c("  1) Nuovo target", C.BOLD))
-    print(c("  2) Carica scan esistente", C.BOLD))
+    print(c("  1) New target", C.BOLD))
+    print(c("  2) Load existing scan", C.BOLD))
     print()
-    mode = ask("Scelta", "1")
+    mode = ask("Choice", "1")
     if mode == "2":
         return _pick_existing_scan()
-    target = ask("Inserisci IP target")
+    target = ask("Enter target IP")
     if not target:
-        print(c("[!] IP non valido.", C.RED))
+        print(c("[!] Invalid IP.", C.RED))
         return None
     state = ScanState.new(target)
-    print(c(f"[+] Nuovo scan: {state.outdir}", C.GREEN))
+    print(c(f"[+] New scan: {state.outdir}", C.GREEN))
     return state
 
 
 def run_menu(state: ScanState) -> ScanState | None:
     actions = {
-        "1": ("Full TCP scan (-p-)", lambda: nmap.run_full_tcp(state)),
-        "2": ("Detail scan (-sCV)", lambda: nmap.run_detail_tcp(state)),
-        "3": ("UDP top-100 (foreground)", lambda: nmap.run_udp(state, background=False)),
-        "4": ("UDP top-100 (background)", lambda: nmap.run_udp(state, background=True)),
-        "5": ("Estrai dominio da nmap + /etc/hosts", lambda: nmap.update_domain_from_nmap(state, offer_hosts=True) or True),
-        "6": ("FFuf subdomains", lambda: ffuf.run_ffuf(state)),
-        "7": ("Pipeline completa", lambda: pipeline.run_pipeline(state) or True),
-        "8": ("Mostra file generati", lambda: _show_files(state) or True),
+        "1": lambda: nmap.run_full_tcp(state),
+        "2": lambda: nmap.run_detail_tcp(state),
+        "3": lambda: nmap.run_udp(state, background=False),
+        "4": lambda: nmap.run_udp(state, background=True),
+        "5": lambda: nmap.update_domain_from_nmap(state, offer_hosts=True) or True,
+        "6": lambda: ffuf.run_ffuf(state),
+        "7": lambda: pipeline.run_pipeline(state) or True,
+        "8": lambda: _show_files(state) or True,
     }
 
     while True:
         _banner()
         _status_line(state)
-        print(c("  1) Full TCP scan (-p-)", C.BOLD))
-        print(c("  2) Detail scan (-sCV)", C.BOLD))
-        print(c("  3) UDP top-100 (foreground)", C.BOLD))
-        print(c("  4) UDP top-100 (background)", C.BOLD))
-        print(c("  5) Estrai dominio da nmap + /etc/hosts", C.BOLD))
-        print(c("  6) FFuf subdomains", C.BOLD))
-        print(c("  7) Pipeline completa", C.BOLD))
-        print(c("  8) Mostra file generati", C.BOLD))
-        print(c("  9) Cambia target", C.BOLD))
-        print(c("  0) Esci", C.BOLD))
-        print()
 
-        choice = ask("Scelta", "7")
+        for key, label, task_ids in MENU_ITEMS:
+            if key in ("0", "8", "9", "10"):
+                print(c(f"  {key}) {label}", C.BOLD))
+            else:
+                icon = _task_icon(state, task_ids)
+                done_tag = c(" [done]", C.GREEN) if task_ids and state.is_done(*task_ids) else ""
+                print(f"  {key}) {icon} {c(label, C.BOLD)}{done_tag}")
+
+        print()
+        choice = ask("Choice", "7")
         if choice == "0":
             print(c("Bye.", C.GREEN))
             return None
@@ -117,17 +159,27 @@ def run_menu(state: ScanState) -> ScanState | None:
                 return new_state
             pause()
             continue
+        if choice == "10":
+            print()
+            print(c("── Clean up target files ──", C.YELLOW, C.BOLD))
+            try:
+                state = cleanup.run_cleanup(state)
+            except KeyboardInterrupt:
+                print(c("\n[!] Interrupted.", C.YELLOW))
+            pause()
+            continue
         if choice in actions:
-            label, fn = actions[choice]
+            label = next(item[1] for item in MENU_ITEMS if item[0] == choice)
             print()
             print(c(f"── {label} ──", C.YELLOW, C.BOLD))
             try:
-                fn()
+                actions[choice]()
+                state = ScanState.load(state.outdir)
             except KeyboardInterrupt:
-                print(c("\n[!] Interrotto.", C.YELLOW))
+                print(c("\n[!] Interrupted.", C.YELLOW))
             pause()
             continue
-        print(c("[!] Scelta non valida.", C.RED))
+        print(c("[!] Invalid choice.", C.RED))
         pause()
 
 

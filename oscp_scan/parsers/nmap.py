@@ -10,6 +10,25 @@ DOMAIN_RE = re.compile(
 )
 LAB_TLD_RE = re.compile(r"\.(htb|htb\.cloud|local|corp|internal)$", re.I)
 
+# Scanner/tooling noise — never treat as target hostnames
+BLOCKED_DOMAINS = frozenset({
+    "nmap.org",
+    "www.nmap.org",
+    "insecure.org",
+    "www.insecure.org",
+})
+
+
+def is_blocked_domain(host: str) -> bool:
+    host = host.strip().lower()
+    if host in BLOCKED_DOMAINS:
+        return True
+    return host == "nmap.org" or host.endswith(".nmap.org")
+
+
+def filter_domains(domains: list[str]) -> list[str]:
+    return sorted(d for d in domains if not is_blocked_domain(d))
+
 
 def extract_open_ports(gnmap_file: Path, proto: str = "tcp") -> list[int]:
     if not gnmap_file.exists():
@@ -37,25 +56,25 @@ def extract_domains_from_nmap(nmap_file: Path, target_ip: str) -> list[str]:
 
     for match in re.finditer(r"Nmap scan report for ([^( \n]+)", text):
         host = match.group(1).strip().lower()
-        if host != target_ip and DOMAIN_RE.match(host):
+        if host != target_ip and DOMAIN_RE.match(host) and not is_blocked_domain(host):
             found.add(host)
 
     for match in re.finditer(r"commonName[=: ]\s*([^,/|\n]+)", text, re.I):
         host = match.group(1).strip().lower()
-        if host != target_ip and DOMAIN_RE.match(host):
+        if host != target_ip and DOMAIN_RE.match(host) and not is_blocked_domain(host):
             found.add(host)
 
     for match in re.finditer(r"DNS:([^,\n|]+)", text, re.I):
         host = match.group(1).strip().lower()
-        if host != target_ip and DOMAIN_RE.match(host):
+        if host != target_ip and DOMAIN_RE.match(host) and not is_blocked_domain(host):
             found.add(host)
 
     for match in re.finditer(r"https?://([^/\"<>\s:]+)", text, re.I):
         host = match.group(1).strip().lower()
-        if host not in ("localhost", target_ip) and DOMAIN_RE.match(host):
+        if host not in ("localhost", target_ip) and DOMAIN_RE.match(host) and not is_blocked_domain(host):
             found.add(host)
 
-    return sorted(found)
+    return filter_domains(sorted(found))
 
 
 def pick_base_domain(domains: list[str]) -> str | None:
