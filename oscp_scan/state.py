@@ -17,6 +17,7 @@ TASK_LABELS: dict[str, str] = {
     "hosts_updated": "/etc/hosts updated",
     "ffuf": "FFuf subdomains",
     "feroxbuster": "Feroxbuster directories",
+    "lft": "LFT traceroute",
     "pipeline": "Full pipeline",
 }
 
@@ -28,6 +29,7 @@ TRACKED_TASKS = (
     "hosts_updated",
     "ffuf",
     "feroxbuster",
+    "lft",
 )
 
 

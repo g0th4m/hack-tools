@@ -11,6 +11,8 @@ from oscp_scan.parsers import nmap as nmap_parser
 from oscp_scan.state import ScanState
 from oscp_scan.ui import C, c
 
+_NMAP_BASE = ("nmap", "--reason")
+
 
 def _require_nmap() -> bool:
     if shutil.which("nmap"):
@@ -24,7 +26,7 @@ def run_full_tcp(state: ScanState) -> bool:
         return False
 
     prefix = str(state.full_prefix)
-    cmd = ["nmap", "-p-", "--min-rate", "5000", "-oA", prefix, state.target]
+    cmd = [*_NMAP_BASE, "-p-", "--min-rate", "5000", "-oA", prefix, state.target]
     print(c("[+] Full TCP port scan", C.YELLOW, C.BOLD))
 
     returncode, command_str = run_confirmed(state, "full_tcp", cmd)
@@ -56,7 +58,7 @@ def run_detail_tcp(state: ScanState) -> bool:
 
     ports = ",".join(str(p) for p in state.ports_tcp)
     prefix = str(state.detail_prefix)
-    cmd = ["nmap", "-sCV", "-p", ports, "-oA", prefix, state.target]
+    cmd = [*_NMAP_BASE, "-sCV", "-p", ports, "-oA", prefix, state.target]
     print(c("[+] Detailed TCP scan (-sCV)", C.YELLOW, C.BOLD))
 
     returncode, command_str = run_confirmed(state, "detail_tcp", cmd)
@@ -74,7 +76,7 @@ def run_udp(state: ScanState, *, background: bool = False) -> bool:
 
     prefix = str(state.udp_prefix)
     log_file = state.path / "udp.log"
-    cmd = ["nmap", "-sU", "--top-ports", "100", "-oA", prefix, state.target]
+    cmd = [*_NMAP_BASE, "-sU", "--top-ports", "100", "-oA", prefix, state.target]
     print(c("[+] UDP top-100 scan", C.YELLOW, C.BOLD))
 
     if background:
